@@ -685,7 +685,7 @@ function draw(){
   const permits=world.agents.filter(b=>b.alive&&b!==me&&(b.permitted[me.id]||0)>0&&b.permitted[me.id]>=world.turn).map(b=>"A"+b.id); const us=world.group(me).filter(b=>b!==me).map(b=>"A"+b.id);
   $("permits").textContent=(us.length?"us: "+us.join(", ")+"  ":"")+(permits.length?"may take from: "+permits.join(", "):"");
   $("offers").textContent=me.offersIn.map(o=>o.want.act==="hurt"?`A${o.from} asks you to hurt A${o.want.target}`:o.want.act==="go"?`A${o.from} asks you to go ${o.want.target!==null?"to A"+o.want.target:"to "+(o.want.place.x-me.x)+","+(o.want.place.y-me.y)+" from you"}`:o.want.place?`A${o.from} asks you to ${o.want.act==="stash"?"stash":"get food"} at ${o.want.place.x-me.x},${o.want.place.y-me.y} from you`:o.give>0?`A${o.from} offers ${o.give} if you give ${o.want.amt||1} (give to accept)`:`A${o.from} asks you for ${o.want.amt||1}`).join(" · ");
-  for(;feedSeen<world.events.length;feedSeen++){ const ev=world.events[feedSeen]; if(dist(me.x,me.y,ev.x,ev.y)>R&&ev.cls!=="me"&&!/\byou\b/.test(ev.s)) continue; const d=document.createElement("div"); d.className=ev.cls||""; d.textContent=`t${ev.t} ${ev.s}`; feed.appendChild(d); }
+  for(;feedSeen<world.events.length;feedSeen++){ const ev=world.events[feedSeen]; const far=dist(me.x,me.y,ev.x,ev.y)>R; if(far&&(ev.cls==="say"||(ev.cls!=="me"&&!/\byou\b/.test(ev.s)))) continue;   /* speech only from people on screen, the same radius they hear in */ const d=document.createElement("div"); d.className=ev.cls||""; d.textContent=`t${ev.t} ${ev.s}`; feed.appendChild(d); }
   feed.scrollTop=feed.scrollHeight; if(!me.alive) $("dead").style.display="inline"; preview();
 }
 function turn(act){ if(!me.alive) return; world.turnStep(act); draw(); refreshNames(); }
