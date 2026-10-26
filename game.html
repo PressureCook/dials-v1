@@ -86,7 +86,7 @@ const P = {
   water_drain:1, springs:12, drink:30,        /* water: drains each turn, death at 0; springs never run dry; drinking at one restores this much; water cannot be carried */
   old_age:600, old_span:600, mortality:0.02,   // after old_age, strength and capacity decline over old_span and the chance of natural death rises to mortality per turn
   status:0,              // ambition (off by default; see SPEC findings): a change in my share of the wealth I can see counts as gain or loss at this many energy per unit share (0 = off); through reward like any gain
-  learn_words:true, word_known:3,   // words mean what follows them: a content word is understood once followed by the same act word_known times
+  learn_words:false, word_known:3,   // words mean what follows them: a content word is understood once followed by the same act word_known times
   kin_max:1, death_worth:100, death_zone:25, breed_drive:300, breed_window:20,   /* each agent draws its own kin weight in [0, kin_max]; a death seen is the loss of a life; a child is felt as breed_drive, the largest felt gain of any single act (the pull to reproduce), and a proposal stands breed_window turns */
   birth_energy:70, birth_food:6, birth_cost:30, child_energy:40, grow_turns:100, max_pop:250,
   impression:4,          // observations of someone before your estimate of them is fully their record rather than the prior

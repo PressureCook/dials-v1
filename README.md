@@ -2,7 +2,9 @@
 
 A ground up rewrite of the dials simulation, at the level of individual agents. Sixteen agents with their own reward, fear and guilt dials forage, steal, give, make promises, break them, gossip and threaten in a world with too little food. Then I measure how each dial changes behaviour.
 
-`game.html` is the browser version you can watch. Related: [dials-model](https://github.com/PressureCook/dials-model), [dial-society](https://github.com/PressureCook/dial-society).
+`game.html` is the browser version you can watch.
+`game.html` runs with one shared language (`learn_words:false` near the top of the script). Set it to `true` for the experiment where every agent learns words for itself and coins its own.
+ Related: [dials-model](https://github.com/PressureCook/dials-model), [dial-society](https://github.com/PressureCook/dial-society).
 
 ## Notes
 
