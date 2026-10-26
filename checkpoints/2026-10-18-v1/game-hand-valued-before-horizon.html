@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dials</title>
+<style>
+  :root{--bg:#0e0f12;--panel:#17191f;--ink:#e6e4dc;--dim:#8a8f99;--food2:#7fc85a;--stash:#c9a227;--low:#d04b3c;--line:#272a33;--say:#b9c7e8}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.4 ui-monospace,Menlo,Consolas,monospace;display:flex;height:100vh;overflow:hidden}
+  #left{flex:0 0 auto;max-width:626px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px;gap:10px}
+  canvas{background:#0a0b0e;border:1px solid var(--line)}
+  #right{flex:1;display:flex;flex-direction:column;min-width:360px;border-left:1px solid var(--line);background:var(--panel)}
+  .box{padding:10px 14px;border-bottom:1px solid var(--line)}
+  .bar{height:10px;background:#000;border:1px solid var(--line);margin:3px 0 8px}
+  .bar>i{display:block;height:100%;background:var(--food2)}
+  #energy.low>i{background:var(--low)}
+  #feed{flex:1;overflow-y:auto;padding:10px 14px;font-size:13px}
+  #feed div{padding:2px 0;border-bottom:1px dotted #1f222a;color:var(--dim)}
+  #feed div.me{color:var(--ink)} #feed div.say{color:var(--say)} #feed div.bad{color:#e8a39a}
+  .keys{display:grid;grid-template-columns:auto 1fr;gap:1px 10px;font-size:12px;color:var(--dim)}
+  .keys b{color:var(--ink);font-weight:600}
+  h3{margin:0 0 6px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+  #target{color:#f0c674}
+  button,select,input{background:#222530;color:var(--ink);border:1px solid var(--line);padding:4px 6px;font:inherit;cursor:pointer}
+  input{width:52px}
+  #dead{display:none;color:var(--low);font-weight:700}
+  #say{display:flex;gap:4px;flex-wrap:wrap;align-items:center;font-size:13px}
+  #say .cond{display:none;gap:4px;flex-wrap:wrap;align-items:center;width:100%;padding-left:12px;border-left:2px solid var(--line)}
+  #say.hascond .cond{display:flex}
+  #preview{color:var(--say);margin-top:6px;min-height:1.4em}
+</style>
+</head>
+<body>
+<div id="left">
+  <canvas id="c" width="594" height="594"></canvas>
+  <div style="display:flex;gap:14px;align-items:center;color:var(--dim);font-size:12px;flex-wrap:wrap;max-width:594px">
+    <span id="turn">turn 0</span><span>turn based: every action you take, everyone else takes one and the world drains</span>
+    <span id="dead">you are dead. reload to start again.</span>
+  </div>
+</div>
+<div id="right">
+  <div class="box">
+    <h3>you</h3>
+    energy <span id="e"></span>
+    <div class="bar" id="energy"><i></i></div>
+    carrying <span id="carry"></span> / 8
+    <div class="bar"><i id="carrybar" style="background:var(--stash)"></i></div>
+    target: <span id="target">none</span> <span id="targetinfo" style="color:var(--dim)"></span>
+    <div id="offers" style="color:var(--say);font-size:12px;margin-top:4px"></div>
+  </div>
+  <div class="box">
+    <h3>keys</h3>
+    <div class="keys">
+      <b>WASD / arrows</b><span>move (picks up food you step on)</span>
+      <b>E</b><span>eat from what you carry</span>
+      <b>Q</b><span>stash here / dig up yours / dig up someone else's you saw buried (counts as taking)</span>
+      <b>Tab / click</b><span>pick a target</span>
+      <b>F / G / H</b><span>take from / give 3 to / hurt the target (adjacent)</span>
+      <b>space</b><span>wait a turn</span>
+      <b>enter</b><span>say the sentence below to everyone in view (addressed to your target)</span>
+    </div>
+  </div>
+  <div class="box">
+    <h3>say</h3>
+    <div id="say">
+      <select id="s_who"><option value="me">I</option><option value="you">you</option><option value="anyone">anyone</option><option value="everyone">everyone</option></select>
+      <select id="s_time"><option value="will">will</option><option value="did">did</option></select>
+      <label><input type="checkbox" id="s_not" style="width:auto"> not</label>
+      <select id="s_act"><option>give</option><option>take</option><option>hurt</option><option>signal</option></select>
+      <input id="s_amt" type="number" min="0" max="8" value="2">
+      <span>to/from</span>
+      <select id="s_whom"><option value="you">you</option><option value="me">me</option><option value="anyone">anyone</option><option value="everyone">everyone</option></select>
+      <label><input type="checkbox" id="s_q" style="width:auto"> ?</label>
+      <label><input type="checkbox" id="s_if" style="width:auto"> if…</label>
+      <div class="cond">
+        <select id="c_who"><option value="you">you</option><option value="me">I</option><option value="anyone">anyone</option><option value="everyone">everyone</option></select>
+        <select id="c_time"><option value="did">did</option><option value="will">will</option></select>
+        <label><input type="checkbox" id="c_not" style="width:auto"> not</label>
+        <select id="c_act"><option>take</option><option>give</option><option>hurt</option><option>signal</option></select>
+        <input id="c_amt" type="number" min="0" max="8" value="0">
+        <span>to/from</span>
+        <select id="c_whom"><option value="me">me</option><option value="you">you</option><option value="anyone">anyone</option><option value="everyone">everyone</option></select>
+      </div>
+    </div>
+    <div id="preview"></div>
+  </div>
+  <div id="feed"></div>
+</div>
+
+<script>
+// ============================================================ parameters
+const P = {
+  W:28, H:28, food_tiles:40, food_max:10, food_regrow:0.07,
+  eat_value:10, base_drain:1, act_cost:0.6, hurt_cost:2, hurt_damage:25, hurt_spread:0.6,
+  carry_cap:8, view_range:4, memory_decay:0.995, hot_gain:0.08, hot_decay:0.8,
+  guilt_drain:0.5, promise_window:6, horizon:10, stash_memory:40,
+  stranger_prior:{take:0.15, give:0.05, hurt:0.05},
+};
+let seed=(Date.now()%100000)|0;
+function rnd(){ seed=(seed*1103515245+12345)&0x7fffffff; return seed/0x7fffffff; }
+const rint=n=>Math.floor(rnd()*n), pick=a=>a[rint(a.length)];
+const key=(x,y)=>x+","+y, dist=(ax,ay,bx,by)=>Math.max(Math.abs(ax-bx),Math.abs(ay-by));
+
+// ============================================================ memory
+class Tally {
+  constructor(){ this.take=0; this.give=0; this.hurt=0; this.kept=0; this.broke=0; this.seen=0; this.dmg=0; this.hits=0; }
+  decay(k){ for(const f of ["take","give","hurt","kept","broke","seen","dmg","hits"]) this[f]*=k; }
+  rate(f,prior){ const w=Math.min(this.seen,10)/10; const v=this.seen>0?this[f]/this.seen:prior; return w*v+(1-w)*prior; }
+  cred(){ const n=this.kept+this.broke; return n===0?0.5:(this.kept+0.5)/(n+1); }
+}
+class Agent {
+  constructor(id,x,y,r,f,g){
+    Object.assign(this,{id,x,y,reward:r,fear:f,guilt:g,energy:70,carried:0,alive:true,died:-1,
+      tally:{},promOut:[],promIn:[],knownFood:{},knownStash:{},seen:new Set(),threats:{},
+      hotR:0,hotF:0,hotG:0,predAcc:0,snap:70,lastTookFromMe:-1,isPlayer:false,say:null,sayT:-9,heard:[],offersIn:[]});
+  }
+  R(){ return Math.min(1,this.reward*(1+this.hotR)); } F(){ return Math.min(1,this.fear*(1+this.hotF)); } G(){ return Math.min(1,this.guilt*(1+this.hotG)); }
+  t(o){ return this.tally[o]||(this.tally[o]=new Tally()); }
+  name(){ return this.isPlayer?"you":"A"+this.id; }
+}
+
+// ============================================================ sentences
+// {who, time, neg, act, amt, whom, q, cond}. who/whom: "me" | "you" | agent id (number) | "anyone" | "everyone"
+function resolve(ref,speaker,addressee){ return ref==="me"?speaker.id:ref==="you"?(addressee?addressee.id:null):ref; }
+function render(s,speaker,addressee,listener){
+  const nm=(ref,subject)=>{ const r=resolve(ref,speaker,addressee);
+    if(r==="anyone"||r==="everyone") return r; if(r===null) return "someone";
+    if(listener&&r===listener.id) return subject?"you":"you"; if(r===speaker.id) return subject?"I":"me";
+    return world.agents[r].name(); };
+  const subj=nm(s.who,true), obj=nm(s.whom,false);
+  const verb=s.time==="will"?(s.neg?"will not ":"will ")+s.act:(s.neg?"did not ":"")+(s.neg?s.act:{take:"took",give:"gave",hurt:"hurt",signal:"spoke to"}[s.act]);
+  const amt=(s.act==="give"||s.act==="take")&&s.amt>0?` ${s.amt}`:"";
+  const prep=s.act==="take"?" from ":s.act==="give"?" to ":" ";
+  let out=`${subj} ${verb}${amt}${prep}${obj}`;
+  if(s.cond) out+=" if "+render(s.cond,speaker,addressee,listener);
+  return out+(s.q?"?":"");
+}
+
+// ============================================================ world
+class World {
+  constructor(n){
+    this.turn=0; this.food={}; this.stash={}; this.agents=[]; this.events=[];
+    while(Object.keys(this.food).length<P.food_tiles) this.food[key(rint(P.W),rint(P.H))]=2+rnd()*(P.food_max-2);
+    for(let i=0;i<n;i++){ const a=new Agent(i,rint(P.W),rint(P.H),Math.round(rnd()*10)/10,Math.round(rnd()*10)/10,Math.round(rnd()*10)/10); a.strength=P.hurt_damage*(1-P.hurt_spread/2+rnd()*P.hurt_spread); this.agents.push(a); }
+  }
+  near(a,r=P.view_range){ return this.agents.filter(b=>b.alive&&b!==a&&dist(a.x,a.y,b.x,b.y)<=r); }
+  adj(a){ return this.near(a,1); }
+  log(s,cls,at){ this.events.push({t:this.turn,s,cls,x:at.x,y:at.y}); }
+
+  // ---- perception: the only thing a first person view may use
+  view(a){ const tiles={}, R=P.view_range;
+    for(let dx=-R;dx<=R;dx++) for(let dy=-R;dy<=R;dy++){ const x=a.x+dx,y=a.y+dy; if(x<0||y<0||x>=P.W||y>=P.H) continue; const k=key(x,y); tiles[k]={x,y,food:this.food[k]||0,stash:this.stash[k]||null}; }
+    return {tiles,agents:this.near(a)}; }
+  perceive(a){ const v=this.view(a);
+    for(const k in v.tiles){ a.seen.add(k); const f=v.tiles[k].food; if(f>0) a.knownFood[k]=f; else if(k in a.knownFood) a.knownFood[k]=0; }
+    for(const k in a.knownStash) for(const oid in a.knownStash[k]) if(this.turn-a.knownStash[k][oid]>P.stash_memory) delete a.knownStash[k][oid]; }
+
+  // ---- other minds
+  strangerRate(a,f){ const ts=Object.values(a.tally).filter(t=>t.seen>0); if(!ts.length) return P.stranger_prior[f]; return ts.reduce((s,t)=>s+t.rate(f,P.stranger_prior[f]),0)/ts.length; }
+  pTake(a,b){ const t=a.t(b.id); return t.seen>0?t.rate("take",P.stranger_prior.take):this.strangerRate(a,"take"); }
+  pGive(a,b){ const t=a.t(b.id); return t.seen>0?t.rate("give",P.stranger_prior.give):this.strangerRate(a,"give"); }
+  pHurt(a,b){ const t=a.t(b.id); const base=t.seen>0?t.rate("hurt",P.stranger_prior.hurt):this.strangerRate(a,"hurt"); return Math.min(1,base+(a.threats[b.id]||0)); }
+  mystrength(a){ const t=a.t(a.id); return t.hits>0.2?t.dmg/t.hits:P.hurt_damage; }
+  dmgOf(a,b){ const t=a.t(b.id); if(t.hits>0.2) return t.dmg/t.hits; const ts=Object.values(a.tally).filter(t=>t.hits>0.2); if(ts.length) return ts.reduce((s,t)=>s+t.dmg/t.hits,0)/ts.length; return P.hurt_damage; }
+  fv(a,food){ const need=Math.max(0,100-a.energy)+P.base_drain*P.horizon; return Math.min(food*P.eat_value,need); }
+  grievance(a,id){ const t=a.t(id); return t.rate("take",0)+t.rate("hurt",0)*1.5; }
+
+  // ---- candidates: [name, gain, cost, loss, harm, payload]
+  candidates(a){
+    const C=[], near=this.near(a), adj=this.adj(a);
+    const threatHere=adj.reduce((s,b)=>s+this.pTake(a,b)*a.carried+this.pHurt(a,b)*this.dmgOf(a,b),0);
+    const starving=adj.filter(b=>b.energy<20);
+    const omission=a.carried>0?starving.reduce((s,b)=>s+Math.min(a.carried,20-b.energy),0):0;
+    const starve=Math.max(0,30-a.energy-a.carried*P.eat_value)*0.5;
+    C.push(["idle",0,0,threatHere+starve,omission,null]);
+    if(adj.length&&threatHere>0.5){ let bestD=null,bestS=-1;
+      for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]]){ const x=a.x+dx,y=a.y+dy; if(x<0||y<0||x>=P.W||y>=P.H) continue;
+        const sc=adj.reduce((m,b)=>m+dist(x,y,b.x,b.y)*(this.pHurt(a,b)+this.pTake(a,b)),0); if(sc>bestS){bestS=sc;bestD={dx,dy};} }
+      if(bestD) C.push(["move",0,P.act_cost,threatHere*0.25+starve,omission,bestD]); }
+    if(a.carried>0&&a.energy<95){ const amt=Math.min(a.carried,100-a.energy); const urg=1+2*(1-a.energy/100); C.push(["eat",amt*P.eat_value*urg,P.act_cost*0.3,threatHere*0.5,omission,amt]); }
+    let best=null;
+    const sources=Object.entries(a.knownFood);
+    for(const k in this.stash) if(this.stash[k][a.id]) sources.push([k,this.stash[k][a.id]]);
+    for(const [k,amt] of sources){ if(amt<=0.1) continue; const [px,py]=k.split(",").map(Number); const d=dist(a.x,a.y,px,py); const room=P.carry_cap-a.carried; if(room<0.2) continue;
+      let val=this.fv(a,Math.min(amt,room))*0.8*Math.pow(0.92,d); val*=Math.pow(0.75,near.filter(b=>dist(b.x,b.y,px,py)<d).length);
+      if(!best||val>best[0]) best=[val,px,py,d,k]; }
+    if(best&&best[0]>0.05){ const [val,px,py,d,k]=best; const loss=near.filter(b=>dist(b.x,b.y,px,py)<=1).reduce((s,b)=>s+this.pHurt(a,b)*this.dmgOf(a,b)*0.5,0); C.push(["forage",val,P.act_cost,loss,omission,{x:px,y:py,k}]); }
+    const R=P.view_range, unseen=[];
+    for(let dx=-R-1;dx<=R+1;dx++) for(let dy=-R-1;dy<=R+1;dy++){ const x=a.x+dx,y=a.y+dy; if(x>=0&&y>=0&&x<P.W&&y<P.H&&!a.seen.has(key(x,y))) unseen.push({x,y}); }
+    if(unseen.length){ let sf=0; for(const k of a.seen) if((a.knownFood[k]||0)>0.1) sf++; const prior=a.seen.size?Math.max(0.05,sf/a.seen.size):Math.max(0.3,P.food_tiles/(P.W*P.H));
+      C.push(["explore",this.fv(a,prior*P.food_max*0.36),P.act_cost,threatHere*0.3+starve*0.5+1,omission,pick(unseen)]); }
+    for(const k in a.knownStash){ const st=this.stash[k]; if(!st) continue; const room=P.carry_cap-a.carried; if(room<0.2) continue;
+      for(const oid in a.knownStash[k]){ if(+oid===a.id||!(st[oid]>0.05)) continue; const owner=this.agents[+oid]; const [px,py]=k.split(",").map(Number); const d=dist(a.x,a.y,px,py);
+        const amt=Math.min(st[oid],room); const ownerNear=owner.alive&&dist(owner.x,owner.y,px,py)<=P.view_range;
+        const retal=this.pHurt(a,owner)*(this.dmgOf(a,owner)+(a.carried+amt)*0.5*P.eat_value)*(ownerNear?1:0.3); const witnesses=near.filter(c=>dist(c.x,c.y,px,py)<=P.view_range).reduce((s,c)=>s+this.pGive(a,c),0)*2;
+        let harm=amt; if(this.grievance(a,+oid)>0.3) harm*=0.3;
+        C.push([d===0?"raid":"forage",this.fv(a,amt)*0.8*Math.pow(0.92,d),P.act_cost,retal+witnesses,harm,d===0?{owner:+oid}:{x:px,y:py,k,raid:+oid}]); } }
+    if(a.carried>=P.carry_cap-0.01){ const risk=near.reduce((s,b)=>s+this.pTake(a,b),0)*a.carried*0.5; C.push(["stash",a.carried*0.6,P.act_cost*0.5,risk,0,null]); }
+    // walk toward someone an ally asked me to hurt (the hurt itself is weighed when adjacent)
+    for(const req of a.offersIn.filter(o=>o.want.act==="hurt")){ const tgt=near.find(n=>n.id===req.want.target); if(!tgt||dist(a.x,a.y,tgt.x,tgt.y)<=1) continue; const asker=this.agents[req.from];
+      const g=(a.t(asker.id).cred()*(0.5+this.pGive(a,asker))*this.fv(a,3)*1.5+(a.threats[asker.id]||0)*this.dmgOf(a,asker))*Math.pow(0.85,dist(a.x,a.y,tgt.x,tgt.y));
+      C.push(["explore",g,P.act_cost,this.pHurt(a,tgt)*this.dmgOf(a,tgt)*0.5,0,{x:tgt.x,y:tgt.y}]); }
+    for(const b of adj){ const tb=a.t(b.id), gr=this.grievance(a,b.id);
+      if(b.carried>0.1&&P.carry_cap-a.carried>0.2){ const amt=Math.min(b.carried,P.carry_cap-a.carried);
+        // if they hit back I lose energy and drop half of everything I am carrying, loot included
+        const pr=Math.min(1,this.pHurt(a,b)+(a.threats[b.id]||0)); const retal=pr*(this.dmgOf(a,b)+(a.carried+amt)*0.5*P.eat_value); const standing=near.filter(c=>c!==b).reduce((s,c)=>s+this.pGive(a,c),0)*2;
+        let harm=Math.min(amt,b.energy); if(gr>0.3) harm*=0.3; C.push(["take",this.fv(a,amt),P.act_cost,retal+standing,harm,{b,amt}]); }
+      if(a.carried>0.5){ const amt=Math.min(a.carried,3); const ret=this.pGive(a,b)*this.fv(a,amt)*1.2+tb.cred()*0.5; /* return in energy units */ const prevented=b.energy<25?Math.min(amt,Math.max(0,25-b.energy)):0;
+        const owed=a.promOut.filter(p=>p.target===b.id).reduce((s,p)=>s+p.amount,0);
+        const offer=a.offersIn.find(o=>o.from===b.id&&o.want.act==="give"); let ret2=ret;
+        if(offer){ const amtW=Math.min(a.carried,offer.want.amt||1); ret2=ret+tb.cred()*(offer.give>0?this.fv(a,offer.give)*0.8:(0.5+this.pGive(a,b))*this.fv(a,amtW)*1.5)+(a.threats[b.id]||0)*this.dmgOf(a,b); C.push(["give",ret2,P.act_cost,0,omission-(prevented+owed*0.5),{b,amt:amtW,accept:offer}]); }
+        else C.push(["give",ret,P.act_cost,0,omission-(prevented+owed*0.5),{b,amt}]); }
+      // 2. a credible ally's request to hurt b counts as expected return, same as a request to give
+      const req=a.offersIn.find(o=>o.want.act==="hurt"&&o.want.target===b.id); const asker=req?this.agents[req.from]:null;
+      const allyGain=asker?a.t(asker.id).cred()*(0.5+this.pGive(a,asker))*this.fv(a,3)*1.5+(a.threats[asker.id]||0)*this.dmgOf(a,asker):0;
+      let gh=allyGain; if(gr>0.2) gh+=6; gh+=b.carried*0.4; let harm=this.mystrength(a); if(gr>0.3||allyGain>0) harm*=0.3;
+      C.push(["hurt",gh,P.hurt_cost,this.pHurt(a,b)*this.dmgOf(a,b)*1.5,harm,{b,req}]); }
+    // speech: the AI composes from the same grammar. Addressed to one agent, heard by all in view.
+    if(near.length){ const recent=a.heard.filter(h=>this.turn-h.turn<=3); const last=recent.length?recent[recent.length-1]:null;
+      const spk=last?near.find(n=>n.id===last.from):null; const b=spk||pick(near);
+      // answer the last question asked of me, truthfully, if the asker is worth answering
+      if(last&&last.s.q&&spk&&!this._answering){ const ans=this.answer(a,spk,last.s); if(ans) C.push(["say",1+this.pGive(a,spk)*this.fv(a,3)*2+a.t(spk.id).cred()*2,P.act_cost*0.2,starve,0,{b:spk,s:ans,answers:last}]); }
+      if(a.carried>1) C.push(["say",this.pTake(a,b)*a.carried*0.6,P.act_cost*0.2,starve,0,{b,s:{who:"me",time:"will",act:"hurt",amt:0,whom:"you",cond:{who:"you",time:"did",act:"take",amt:0,whom:"me"}}}]);
+      if(a.carried>1&&!a.promOut.some(p=>p.target===b.id)) C.push(["say",this.pGive(a,b)*2+0.3,P.act_cost*0.2,starve,0,{b,s:{who:"me",time:"will",act:"give",amt:2,whom:"you"}}]);
+      const wrong=Object.keys(a.tally).map(Number).filter(id=>id!==b.id&&this.grievance(a,id)>0.3).sort((p,q)=>this.grievance(a,q)-this.grievance(a,p));
+      if(wrong.length) C.push(["say",0.8,P.act_cost*0.2,starve,0,{b,s:{who:wrong[0],time:"did",act:a.t(wrong[0]).rate("hurt",0)>0.2?"hurt":"take",amt:0,whom:"me"}}]);
+      if(this.grievance(a,b.id)>0.3) C.push(["say",0.6,P.act_cost*0.2,starve,0,{b,s:{who:"you",time:"did",act:a.t(b.id).rate("hurt",0)>0.2?"hurt":"take",amt:0,whom:"me"}}]); }
+    return C;
+  }
+  choose(a){ let best=null,bs=-1e9; for(const c of this.candidates(a)){ const s=a.R()*c[1]-c[2]-a.F()*c[3]-a.G()*c[4]+(rnd()-0.5)*0.1; if(s>bs){bs=s;best=c;} } return best; }
+
+  // ---- hearing: every listener in view interprets the sentence through the speaker's credibility
+  hear(L,sp,addr,s){
+    if(L===sp) return; const c=L.t(sp.id).cred(); const who=resolve(s.who,sp,addr), whom=resolve(s.whom,sp,addr);
+    const ct=Math.max(c,Math.min(1,this.pHurt(L,sp)*2));   // a threat is as believable as the speaker's record of violence
+    if(addr===L) L.heard.push({from:sp.id,s,turn:this.turn});
+    if(s.q) return;                                   // a question carries no claim; it is answered from heard[]
+    // an offer: "I will give N to you if you give M to me" (or any condition on L's own act)
+    if(who===sp.id&&s.time==="will"&&!s.neg&&s.cond&&resolve(s.cond.who,sp,addr)===L.id&&s.act==="give"&&whom===L.id){
+      L.offersIn=L.offersIn.filter(o=>o.from!==sp.id); L.offersIn.push({from:sp.id,give:s.amt||1,want:s.cond,due:this.turn+P.promise_window}); return; }
+    // a request to hurt someone: "you will hurt A9"
+    if(who===L.id&&s.time==="will"&&!s.neg&&s.act==="hurt"&&typeof whom==="number"&&whom!==L.id){ L.offersIn=L.offersIn.filter(o=>!(o.from===sp.id&&o.want.act==="hurt")); L.offersIn.push({from:sp.id,give:0,want:{act:"hurt",target:whom},due:this.turn+P.promise_window}); return; }
+    // a request: "you will give N to me"
+    if(who===L.id&&s.time==="will"&&!s.neg&&s.act==="give"&&whom===sp.id){ L.offersIn=L.offersIn.filter(o=>o.from!==sp.id); L.offersIn.push({from:sp.id,give:0,want:{act:"give",amt:s.amt||1},due:this.turn+P.promise_window}); return; }
+    if(s.time==="did"){                               // a report: updates L's tally of whoever is named as actor
+      if(typeof who==="number"&&who!==L.id&&["take","give","hurt"].includes(s.act)){ const t=L.t(who); const w=c*(s.neg?-0.5:1)*(whom===L.id?1:0.6); t.seen+=Math.abs(w); t[s.act]+=Math.max(0,w); if(w<0) t[s.act]=Math.max(0,t[s.act]+w); }
+      else if(who==="anyone"||who==="everyone"){ for(const t of Object.values(L.tally)) t[s.act]+=c*0.1*(s.neg?-1:1); }
+      return; }
+    if(who===sp.id){                                  // the speaker commits itself
+      const aimed=(whom===L.id)||whom==="anyone"||whom==="everyone";
+      if(s.act==="hurt"&&aimed){ const cond=s.cond&&resolve(s.cond.who,sp,addr)===L.id; L.threats[sp.id]=Math.max(0,(L.threats[sp.id]||0)+(s.neg?-0.3:0.3)*ct*(cond?1:1.3)); }
+      if(s.act==="give"&&aimed&&!s.neg&&whom===L.id&&!sp.promOut.some(p=>p.target===L.id)){ const pr={speaker:sp.id,target:L.id,amount:s.amt||1,due:this.turn+P.promise_window}; sp.promOut.push(pr); L.promIn.push(pr); L.t(sp.id).give+=0.3*c; L.t(sp.id).seen+=0.3*c; }
+      if(s.act==="take"&&aimed){ L.t(sp.id).take+=0.3*c*(s.neg?-1:1); L.t(sp.id).seen+=0.3*c; }
+      return; }
+    if(who==="everyone"||who==="anyone"){             // a rule or a claim about the crowd
+      if(s.act==="hurt"&&(whom===L.id||whom==="anyone")){ L.threats[sp.id]=Math.max(0,(L.threats[sp.id]||0)+0.15*c*(s.neg?-1:1)); } }
+    // "you will …" is a request or a prediction about L; v1 records nothing for it
+  }
+  answer(a,asker,q){
+    const who=resolve(q.who,asker,a), whom=resolve(q.whom,asker,a); const flip=ref=>ref==="me"?"you":ref==="you"?"me":ref;
+    const ans={who:flip(q.who),time:q.time,act:q.act,amt:q.amt,whom:flip(q.whom),neg:false,q:false,cond:q.cond?{...q.cond,who:flip(q.cond.who),whom:flip(q.cond.whom)}:undefined};
+    let truth=null;
+    if(q.time==="did"&&typeof who==="number"){ const t=a.t(who); truth=who===a.id?null:t.rate(q.act==="signal"?"give":q.act,0)>0.2; }
+    else if(q.time==="will"&&who===a.id&&["give","hurt","take"].includes(q.act)&&(whom===asker.id)){
+      this._answering=true; const cs=this.candidates(a); this._answering=false; const c=cs.find(x=>x[0]===q.act&&x[5]&&x[5].b===asker); const idle=cs.find(x=>x[0]==="idle");
+      const sc=x=>a.R()*x[1]-x[2]-a.F()*x[3]-a.G()*x[4]; truth=!!c&&sc(c)>sc(idle); }
+    if(truth===null) return null; ans.neg=!truth; return ans; }
+  speak(a,b,s){ a.say=render(s,a,b); a.sayT=this.turn; for(const L of this.near(a)) this.hear(L,a,b,s);
+    this.log(`${a.name()} to ${b.name()}: "${render(s,a,b)}"`,"say",a); }
+
+  // ---- execution
+  stepToward(a,p){ a.x+=Math.sign(p.x-a.x); a.y+=Math.sign(p.y-a.y); }
+  pickup(a){ const k=key(a.x,a.y); if(this.food[k]>0){ const amt=Math.min(this.food[k],P.carry_cap-a.carried); this.food[k]-=amt; a.carried+=amt; a.knownFood[k]=this.food[k]; return amt; } return 0; }
+  witness(actor,target,kind,amt){ for(const w of this.agents){ if(!w.alive||w===actor) continue; if(dist(w.x,w.y,actor.x,actor.y)<=P.view_range){ const t=w.t(actor.id); const wt=w===target?1:0.5; t.seen+=wt; t[kind]+=wt; if(kind==="hurt"){ t.dmg+=amt; t.hits+=1; } if(w===target&&kind==="take") w.lastTookFromMe=actor.id; } } }
+  execute(a,act){
+    const [name,gain,cost,loss,harm,pl]=act; a.energy-=cost; let caused=0;
+    switch(name){
+      case "idle":{ const got=this.pickup(a); if(got>0.05&&a.isPlayer) this.log(`you picked up ${got.toFixed(1)} food`,"me",a); break; }
+      case "eat":{ const amt=Math.max(0,Math.min(pl,a.carried,100-a.energy)); a.carried-=amt; a.energy=Math.min(100,a.energy+amt*P.eat_value); if(a.isPlayer) this.log(`you ate ${amt.toFixed(1)}`,"me",a); break; }
+      case "forage":{ if(a.x===pl.x&&a.y===pl.y&&pl.raid!==undefined) this.execute(a,["raid",0,0,0,0,{owner:pl.raid}]);
+        else if(a.x===pl.x&&a.y===pl.y){ this.pickup(a); const s=this.stash[pl.k]; if(s&&s[a.id]){ const amt=Math.min(s[a.id],P.carry_cap-a.carried); s[a.id]-=amt; a.carried+=amt; if(s[a.id]<=0.01) delete s[a.id]; } }
+        else { this.stepToward(a,pl); this.pickup(a); } break; }
+      case "move":{ a.x=Math.max(0,Math.min(P.W-1,a.x+pl.dx)); a.y=Math.max(0,Math.min(P.H-1,a.y+pl.dy)); const got=this.pickup(a); if(got>0.05&&a.isPlayer) this.log(`you picked up ${got.toFixed(1)} food`,"me",a); break; }
+      case "explore": this.stepToward(a,pl); this.pickup(a); break;
+      case "stash":{ if(a.carried<0.2){ if(a.isPlayer) this.log("nothing to stash","me",a); break; } const k=key(a.x,a.y); this.stash[k]=this.stash[k]||{}; this.stash[k][a.id]=(this.stash[k][a.id]||0)+a.carried; a.carried=0;
+        for(const w of this.near(a)) (w.knownStash[k]=w.knownStash[k]||{})[a.id]=this.turn; this.log(`${a.name()} stashed food here`,a.isPlayer?"me":"",a); break; }
+      case "unstash":{ const k=key(a.x,a.y), s=this.stash[k]; if(s&&s[a.id]){ const amt=Math.min(s[a.id],P.carry_cap-a.carried); s[a.id]-=amt; a.carried+=amt; if(s[a.id]<=0.01) delete s[a.id]; this.log(`you dug up ${amt.toFixed(1)}`,"me",a);} else this.log("nothing of yours stashed here","me",a); break; }
+      case "raid":{ const k=key(a.x,a.y), s=this.stash[k]; const owners=s?Object.keys(s).filter(id=>+id!==a.id&&s[id]>0.05):[]; if(!owners.length){ if(a.isPlayer) this.log("nothing of anyone else's here","me",a); break; }
+        const oid=+(pl&&pl.owner!==undefined?pl.owner:owners[0]), owner=this.agents[oid]; const amt=Math.max(0,Math.min(s[oid],P.carry_cap-a.carried));
+        if(amt>0.05){ s[oid]-=amt; a.carried+=amt; if(s[oid]<=0.01) delete s[oid]; caused=amt; this.witness(a,owner,"take",amt); this.log(`${a.name()} dug up ${amt.toFixed(1)} of ${owner.name()}'s stash`,owner.isPlayer?"bad":(a.isPlayer?"me":""),a); } break; }
+      case "take":{ const b=pl.b; const amt=Math.max(0,Math.min(pl.amt??P.carry_cap,b.carried,P.carry_cap-a.carried));
+        if(amt>0.05){ b.carried-=amt; a.carried+=amt; caused=amt; this.witness(a,b,"take",amt); this.log(`${a.name()} took ${amt.toFixed(1)} from ${b.name()}`,b.isPlayer?"bad":(a.isPlayer?"me":""),a); } else if(a.isPlayer) this.log("nothing to take","me",a); break; }
+      case "give":{ const b=pl.b; const amt=Math.max(0,Math.min(pl.amt,a.carried,P.carry_cap-b.carried));
+        if(amt>0.05){ a.carried-=amt; b.carried+=amt; this.witness(a,b,"give",amt);
+          for(const pr of [...a.promOut]) if(pr.target===b.id){ a.promOut.splice(a.promOut.indexOf(pr),1); b.promIn=b.promIn.filter(q=>q.speaker!==a.id); b.t(a.id).kept+=1; this.log(`${a.name()} kept a promise to ${b.name()}`,"",a); }
+          this.log(`${a.name()} gave ${amt.toFixed(1)} to ${b.name()}`,a.isPlayer||b.isPlayer?"me":"",a);
+          const off=a.offersIn.find(o=>o.from===b.id&&o.want.act==="give"); if(off){ a.offersIn=a.offersIn.filter(o=>o!==off);
+            if(off.give>0&&!b.promOut.some(p=>p.target===a.id)){ const pr={speaker:b.id,target:a.id,amount:off.give,due:this.turn+P.promise_window}; b.promOut.push(pr); a.promIn.push(pr); this.log(`${a.name()} accepted ${b.name()}'s offer; ${b.name()} now owes ${off.give}`,"",a); } } } else if(a.isPlayer) this.log("nothing to give (or they are full)","me",a); break; }
+      case "hurt":{ const b=pl.b; const dmg=a.strength||P.hurt_damage; b.energy-=dmg; const drop=b.carried*0.5; b.carried-=drop; const k=key(b.x,b.y); this.food[k]=(this.food[k]||0)+drop; caused=dmg;
+        this.witness(a,b,"hurt",dmg); const ts=a.t(a.id); ts.dmg+=dmg; ts.hits+=1; if(pl.req){ a.offersIn=a.offersIn.filter(o=>o!==pl.req); this.log(`${a.name()} hurt ${b.name()} at ${this.agents[pl.req.from].name()}'s request`,"",a); } this.log(`${a.name()} hurt ${b.name()}`,b.isPlayer?"bad":(a.isPlayer?"me":""),a); if(b.energy<=0) this.kill(b); break; }
+      case "say": this.speak(a,pl.b,pl.s); if(pl.answers) a.heard=a.heard.filter(h=>h!==pl.answers); break;
+    }
+    return [caused,harm];
+  }
+  doAct(a,act){ if(!a.alive) return; const [caused,eh]=this.execute(a,act); const sh=Math.max(0,caused-eh*0.5); if(sh>0){ a.hotG+=P.hot_gain*sh/10; a.energy-=P.guilt_drain*a.G()*sh/10; } if(a.energy<=0) this.kill(a); }
+  kill(a){ if(!a.alive) return; a.alive=false; a.died=this.turn; const k=key(a.x,a.y); this.food[k]=(this.food[k]||0)+a.carried; a.carried=0; this.log(`${a.name()} died`,"bad",a); }
+
+  // ---- one turn: player acts, every AI acts once, the world drains
+  turnStep(playerAct){
+    this.turn++;
+    if(me.alive&&playerAct) this.doAct(me,playerAct);
+    const order=this.agents.filter(a=>a.alive&&!a.isPlayer); for(let i=order.length-1;i>0;i--){ const j=rint(i+1); [order[i],order[j]]=[order[j],order[i]]; }
+    for(const a of order){ this.perceive(a); const act=this.choose(a); a.predAcc=(a.R()*act[1]-act[2])*0.3; this.doAct(a,act); }
+    for(const a of this.agents){ if(!a.alive) continue; a.energy-=P.base_drain;
+      for(const k in a.tally) a.tally[k].decay(P.memory_decay); for(const k in a.threats) a.threats[k]*=0.95;
+      a.heard=a.heard.filter(h=>this.turn-h.turn<=6); a.offersIn=a.offersIn.filter(o=>this.turn<=o.due);
+      for(const pr of [...a.promOut]) if(this.turn>pr.due){ a.promOut.splice(a.promOut.indexOf(pr),1); const b=this.agents[pr.target]; b.promIn=b.promIn.filter(q=>q.speaker!==a.id); b.t(a.id).broke+=1; this.log(`${a.name()} broke a promise to ${b.name()}`,b.isPlayer?"bad":"",a); }
+      const err=(a.energy-a.snap)-(a.predAcc-P.base_drain*0.3); a.snap=a.energy; a.predAcc=0;
+      if(err<-1) a.hotF+=P.hot_gain*Math.min(3,-err/5); else if(err>1) a.hotR+=P.hot_gain*Math.min(3,err/5);
+      a.hotR*=P.hot_decay; a.hotF*=P.hot_decay; a.hotG*=P.hot_decay; if(a.energy<=0) this.kill(a); }
+    for(const k in this.food) this.food[k]=Math.min(P.food_max,this.food[k]+P.food_regrow*P.food_max*(0.3+0.7*rnd()));
+  }
+}
+
+// ============================================================ game
+const world=new World(18);
+const me=world.agents[0]; me.isPlayer=true; me.reward=me.fear=me.guilt=0;
+world.log(`you feel ${me.strength>P.hurt_damage*1.15?"strong":me.strength<P.hurt_damage*0.85?"weak":"average"} (you will learn your strength from your first hit)`,"me",me);
+let target=null;
+const cv=document.getElementById("c"), ctx=cv.getContext("2d"), R=P.view_range, N=2*R+1, CELL=cv.width/N, feed=document.getElementById("feed");
+let feedSeen=0;
+const $=id=>document.getElementById(id);
+
+function draw(){
+  ctx.fillStyle="#0a0b0e"; ctx.fillRect(0,0,cv.width,cv.height);
+  const v=world.view(me);
+  for(let dx=-R;dx<=R;dx++) for(let dy=-R;dy<=R;dy++){ const x=me.x+dx,y=me.y+dy,k=key(x,y),t=v.tiles[k]; const px=(dx+R)*CELL,py=(dy+R)*CELL;
+    if(!t) continue; ctx.fillStyle="#12141a"; ctx.fillRect(px+1,py+1,CELL-2,CELL-2);
+    if(t.food>0.3){ const s=Math.min(1,t.food/P.food_max); ctx.fillStyle=`rgba(127,200,90,${0.25+0.75*s})`; ctx.beginPath(); ctx.arc(px+CELL/2,py+CELL/2,CELL*(0.15+0.3*s),0,7); ctx.fill(); }
+    const mine=t.stash&&t.stash[me.id]>0.05, known=me.knownStash[k]&&t.stash&&Object.keys(t.stash).some(id=>+id!==me.id&&t.stash[id]>0.05&&me.knownStash[k][id]!==undefined);
+    if(mine||known){ ctx.strokeStyle=mine?"#f0c674":"#6b5b1e"; ctx.lineWidth=2; ctx.strokeRect(px+CELL*0.3,py+CELL*0.3,CELL*0.4,CELL*0.4); } }
+  ctx.font=`${CELL*0.3}px monospace`; ctx.textAlign="center"; ctx.textBaseline="middle";
+  for(const b of v.agents){ const px=(b.x-me.x+R)*CELL,py=(b.y-me.y+R)*CELL;
+    ctx.fillStyle=b.energy<25?"#d04b3c":"#c9ccd6"; ctx.beginPath(); ctx.arc(px+CELL/2,py+CELL/2,CELL*0.32,0,7); ctx.fill();
+    if(b===target){ ctx.strokeStyle="#f0c674"; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(px+CELL/2,py+CELL/2,CELL*0.42,0,7); ctx.stroke(); }
+    ctx.fillStyle="#0a0b0e"; ctx.font=`${CELL*0.3}px monospace`; ctx.fillText("A"+b.id,px+CELL/2,py+CELL/2);
+    if(b.carried>0.2){ ctx.fillStyle="#c9a227"; ctx.fillRect(px+CELL*0.15,py+CELL*0.86,CELL*0.7*(b.carried/P.carry_cap),CELL*0.08); }
+    if(b.say&&world.turn-b.sayT<2){ ctx.fillStyle="#b9c7e8"; ctx.font=`${CELL*0.26}px monospace`; ctx.fillText("…",px+CELL/2,py+CELL*0.12); } }
+  const cx=R*CELL,cy=R*CELL; ctx.fillStyle="#f2e8c9"; ctx.beginPath(); ctx.arc(cx+CELL/2,cy+CELL/2,CELL*0.34,0,7); ctx.fill();
+  ctx.fillStyle="#0a0b0e"; ctx.font=`${CELL*0.3}px monospace`; ctx.fillText("you",cx+CELL/2,cy+CELL/2);
+  if(me.carried>0.2){ ctx.fillStyle="#c9a227"; ctx.fillRect(cx+CELL*0.15,cy+CELL*0.86,CELL*0.7*(me.carried/P.carry_cap),CELL*0.08); }
+  $("e").textContent=me.energy.toFixed(0); $("energy").firstElementChild.style.width=Math.max(0,me.energy)+"%"; $("energy").classList.toggle("low",me.energy<25);
+  $("carry").textContent=me.carried.toFixed(1); $("carrybar").style.width=(me.carried/P.carry_cap*100)+"%"; $("turn").textContent="turn "+world.turn;
+  if(target&&(!target.alive||dist(me.x,me.y,target.x,target.y)>R)) target=null;
+  $("target").textContent=target?"A"+target.id:"none";
+  $("targetinfo").textContent=target?`${dist(me.x,me.y,target.x,target.y)<=1?"adjacent":"not adjacent"}, carrying ${target.carried.toFixed(1)}${target.energy<25?", looks weak":""}`:"";
+  $("offers").textContent=me.offersIn.map(o=>o.want.act==="hurt"?`A${o.from} asks you to hurt A${o.want.target}`:o.give>0?`A${o.from} offers ${o.give} if you give ${o.want.amt||1} (give to accept)`:`A${o.from} asks you for ${o.want.amt||1}`).join(" · ");
+  for(;feedSeen<world.events.length;feedSeen++){ const ev=world.events[feedSeen]; if(dist(me.x,me.y,ev.x,ev.y)>R&&ev.cls!=="me"&&!/\byou\b/.test(ev.s)) continue; const d=document.createElement("div"); d.className=ev.cls||""; d.textContent=`t${ev.t} ${ev.s}`; feed.appendChild(d); }
+  feed.scrollTop=feed.scrollHeight; if(!me.alive) $("dead").style.display="inline"; preview();
+}
+function turn(act){ if(!me.alive) return; world.turnStep(act); draw(); refreshNames(); }
+function needTarget(adjOnly){ if(!target){ world.log("pick a target first (Tab or click)","me",me); draw(); return false; } if(adjOnly&&dist(me.x,me.y,target.x,target.y)>1){ world.log("get adjacent first","me",me); draw(); return false; } return true; }
+function sentence(){ const num=v=>/^\d+$/.test(v)?+v:v; const s={who:num($("s_who").value),time:$("s_time").value,neg:$("s_not").checked,act:$("s_act").value,amt:+$("s_amt").value,whom:num($("s_whom").value),q:$("s_q").checked};
+  if($("s_if").checked) s.cond={who:num($("c_who").value),time:$("c_time").value,neg:$("c_not").checked,act:$("c_act").value,amt:+$("c_amt").value,whom:num($("c_whom").value)}; return s; }
+function preview(){ $("say").classList.toggle("hascond",$("s_if").checked); $("preview").textContent=(target?`to A${target.id}: `:"(no target) ")+'"'+render(sentence(),me,target)+'"'; }
+function act(k){
+  const mv={w:[0,-1],a:[-1,0],s:[0,1],d:[1,0],arrowup:[0,-1],arrowleft:[-1,0],arrowdown:[0,1],arrowright:[1,0]};
+  if(k in mv){ turn(["move",0,P.act_cost,0,0,{dx:mv[k][0],dy:mv[k][1]}]); return; }
+  switch(k){
+    case "e": turn(["eat",0,P.act_cost*0.3,0,0,Math.min(me.carried,100-me.energy)]); break;
+    case "q":{ const kk=key(me.x,me.y), st=world.stash[kk]||{}; if(st[me.id]) turn(["unstash",0,P.act_cost*0.5,0,0,null]); else if(Object.keys(st).some(id=>+id!==me.id&&st[id]>0.05)&&me.knownStash[kk]) turn(["raid",0,P.act_cost,0,0,null]); else turn(["stash",0,P.act_cost*0.5,0,0,null]); break; }
+    case "f": if(needTarget(true)) turn(["take",0,P.act_cost,0,0,{b:target}]); break;
+    case "g": if(needTarget(true)) turn(["give",0,P.act_cost,0,0,{b:target,amt:3}]); break;
+    case "h": if(needTarget(true)) turn(["hurt",0,P.hurt_cost,0,0,{b:target}]); break;
+    case "enter": if(needTarget(false)) turn(["say",0,P.act_cost*0.2,0,0,{b:target,s:sentence()}]); break;
+    case " ": turn(["idle",0,0,0,0,null]); break;
+    case "tab":{ const n=world.near(me); if(!n.length){ target=null; break; } target=n[(n.indexOf(target)+1)%n.length]; draw(); break; }
+  }
+}
+document.addEventListener("keydown",e=>{ const inForm=["SELECT","INPUT"].includes(document.activeElement.tagName); const k=e.key.toLowerCase();
+  if(inForm&&k!=="enter"&&k!=="tab"&&k!=="escape") return; if(k==="escape"){ document.activeElement.blur(); return; }
+  if(["tab"," ","arrowup","arrowdown","arrowleft","arrowright","enter"].includes(k)) e.preventDefault(); if(inForm) document.activeElement.blur(); act(k); });
+document.querySelectorAll("#say select,#say input").forEach(el=>el.addEventListener("change",preview));
+function refreshNames(){ for(const id of ["s_who","s_whom","c_who","c_whom"]){ const sel=$(id); const keep=sel.value; [...sel.options].filter(o=>/^\d+$/.test(o.value)).forEach(o=>o.remove()); for(const b of world.near(me)){ const o=document.createElement("option"); o.value=b.id; o.textContent="A"+b.id; sel.appendChild(o); } if([...sel.options].some(o=>o.value===keep)) sel.value=keep; } }
+cv.addEventListener("click",e=>{ const r=cv.getBoundingClientRect(); const gx=Math.floor((e.clientX-r.left)/r.width*N)-R, gy=Math.floor((e.clientY-r.top)/r.height*N)-R; const hit=world.near(me).find(b=>b.x===me.x+gx&&b.y===me.y+gy); if(hit) target=hit; draw(); });
+world.log("you wake up hungry. food is the green dots. nothing moves until you do, and every move costs.","me",me);
+world.perceive(me); draw();
+</script>
+</body>
+</html>

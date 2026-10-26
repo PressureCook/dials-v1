@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dials</title>
+<style>
+  :root{--bg:#0e0f12;--panel:#17191f;--ink:#e6e4dc;--dim:#8a8f99;--food:#4f8a3a;--food2:#7fc85a;--stash:#c9a227;--me:#f2e8c9;--low:#d04b3c;--line:#272a33}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.4 ui-monospace,Menlo,Consolas,monospace;display:flex;height:100vh;overflow:hidden}
+  #left{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px;gap:10px}
+  canvas{background:#0a0b0e;border:1px solid var(--line);image-rendering:pixelated}
+  #right{flex:1;display:flex;flex-direction:column;min-width:320px;border-left:1px solid var(--line);background:var(--panel)}
+  .box{padding:10px 14px;border-bottom:1px solid var(--line)}
+  .bar{height:10px;background:#000;border:1px solid var(--line);margin:3px 0 8px}
+  .bar>i{display:block;height:100%;background:var(--food2)}
+  #energy>i{background:var(--food2)} #energy.low>i{background:var(--low)}
+  #feed{flex:1;overflow-y:auto;padding:10px 14px;font-size:13px}
+  #feed div{padding:2px 0;border-bottom:1px dotted #1f222a;color:var(--dim)}
+  #feed div.me{color:var(--ink)} #feed div.say{color:#b9c7e8} #feed div.bad{color:#e8a39a}
+  .keys{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:12px;color:var(--dim)}
+  .keys b{color:var(--ink);font-weight:600}
+  h3{margin:0 0 6px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+  #target{color:#f0c674}
+  button,select{background:#222530;color:var(--ink);border:1px solid var(--line);padding:4px 8px;font:inherit;cursor:pointer}
+  #dead{display:none;color:var(--low);font-weight:700}
+  #talk{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  #talk button{font-size:12px}
+</style>
+</head>
+<body>
+<div id="left">
+  <canvas id="c" width="594" height="594"></canvas>
+  <div style="display:flex;gap:10px;align-items:center;color:var(--dim);font-size:12px">
+    <button id="pause">pause</button>
+    <label>world clock <select id="speed"><option value="30000">very slow</option><option value="5000">slow</option><option value="3000" selected>normal</option><option value="1600">fast</option><option value="700">very fast</option></select></label>
+    <span id="turn">t0</span>
+    <span id="dead">you are dead. reload to start again.</span>
+  </div>
+</div>
+<div id="right">
+  <div class="box">
+    <h3>you</h3>
+    energy <span id="e"></span>
+    <div class="bar" id="energy"><i></i></div>
+    carrying <span id="carry"></span> / 8
+    <div class="bar"><i id="carrybar" style="background:var(--stash)"></i></div>
+    target: <span id="target">none</span> <span id="targetinfo" style="color:var(--dim)"></span>
+  </div>
+  <div class="box">
+    <h3>keys</h3>
+    <div class="keys">
+      <b>WASD / arrows</b><span>move (take food when you stand on it)</span>
+      <b>E</b><span>eat from what you carry</span>
+      <b>Q</b><span>stash here / dig up yours / dig up someone else's you saw buried (counts as taking)</span>
+      <b>Tab / click</b><span>pick a target nearby</span>
+      <b>F</b><span>take from target (must be adjacent)</span>
+      <b>G</b><span>give 3 to target</span>
+      <b>H</b><span>hurt target</span>
+      <b>1 / 2 / 3</b><span>say: threat / promise / gossip</span>
+      <b>&nbsp;</b><span>actions are instant and cost energy; the clock below only drives hunger and regrowth</span>
+    </div>
+    <div id="talk">
+      <button data-k="1">1 "take from me and I hurt you"</button>
+      <button data-k="2">2 "I will give you 2"</button>
+      <button data-k="3">3 "X wronged me" (about whoever last took from you)</button>
+    </div>
+  </div>
+  <div id="feed"></div>
+</div>
+
+<script>
+// ============================================================ engine (port of dials.py)
+const P = {
+  W:28, H:28, food_tiles:40, food_max:10, food_regrow:0.07,
+  eat_value:10, base_drain:1, act_cost:0.6, hurt_cost:1, hurt_damage:12,
+  carry_cap:8, view_range:4, memory_decay:0.97, hot_gain:0.08, hot_decay:0.8,
+  guilt_drain:0.5, promise_window:6, horizon:10,
+  stranger_prior:{take:0.15, give:0.05, hurt:0.05},
+};
+let seed = (Date.now() % 100000) | 0;
+function rnd(){ seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
+const rint = n => Math.floor(rnd() * n);
+const pick = a => a[rint(a.length)];
+const key = (x,y) => x + "," + y;
+const dist = (ax,ay,bx,by) => Math.max(Math.abs(ax-bx), Math.abs(ay-by));
+
+class Tally {
+  constructor(){ this.take=0; this.give=0; this.hurt=0; this.kept=0; this.broke=0; this.seen=0; this.last=0; }
+  decay(k){ for (const f of ["take","give","hurt","kept","broke","seen"]) this[f]*=k; }
+  rate(f, prior){ const w=Math.min(this.seen,10)/10; const v=this.seen>0?this[f]/this.seen:prior; return w*v+(1-w)*prior; }
+  cred(){ const n=this.kept+this.broke; return n===0?0.5:(this.kept+0.5)/(n+1); }
+}
+
+class Agent {
+  constructor(id,x,y,r,f,g){
+    Object.assign(this,{id,x,y,reward:r,fear:f,guilt:g,energy:70,carried:0,alive:true,died:-1,
+      tally:{},promOut:[],promIn:[],knownFood:{},seen:new Set(),threats:{},hotR:0,hotF:0,hotG:0,pred:0,
+      last:"idle",lastTookFromMe:-1,said:{},knownStash:{},snap:70,predAcc:0,reaction:300+rnd()*600,lastActAt:0,isPlayer:false,say:null,sayT:0});
+  }
+  R(){ return Math.min(1,this.reward*(1+this.hotR)); }
+  F(){ return Math.min(1,this.fear*(1+this.hotF)); }
+  G(){ return Math.min(1,this.guilt*(1+this.hotG)); }
+  t(o){ return this.tally[o] || (this.tally[o]=new Tally()); }
+  name(){ return this.isPlayer ? "you" : "A"+this.id; }
+}
+
+class World {
+  constructor(n){
+    this.turn=0; this.food={}; this.stash={}; this.agents=[]; this.events=[];
+    while(Object.keys(this.food).length < P.food_tiles){ this.food[key(rint(P.W),rint(P.H))] = 2+rnd()*(P.food_max-2); }
+    for(let i=0;i<n;i++) this.agents.push(new Agent(i,rint(P.W),rint(P.H),Math.round(rnd()*10)/10,Math.round(rnd()*10)/10,Math.round(rnd()*10)/10));
+  }
+  near(a,r=P.view_range){ return this.agents.filter(b=>b.alive&&b!==a&&dist(a.x,a.y,b.x,b.y)<=r); }
+  adj(a){ return this.near(a,1); }
+  log(s, cls, at){ this.events.push({t:this.turn,s,cls,x:at.x,y:at.y}); }
+
+  // ---- perception: the only thing a first-person view may use
+  view(a){
+    const tiles={}; const R=P.view_range;
+    for(let dx=-R;dx<=R;dx++) for(let dy=-R;dy<=R;dy++){
+      const x=a.x+dx,y=a.y+dy; if(x<0||y<0||x>=P.W||y>=P.H) continue;
+      const k=key(x,y); tiles[k]={x,y,food:this.food[k]||0,stash:this.stash[k]||null};
+    }
+    return {tiles, agents:this.near(a)};
+  }
+  perceive(a){
+    const v=this.view(a);
+    for(const k in v.tiles){ a.seen.add(k); const f=v.tiles[k].food; if(f>0) a.knownFood[k]=f; else if(k in a.knownFood) a.knownFood[k]=0; }
+    for(const b of v.agents) a.t(b.id).last=this.turn;
+  }
+  strangerRate(a,f){ const ts=Object.values(a.tally).filter(t=>t.seen>0); if(!ts.length) return P.stranger_prior[f]; return ts.reduce((s,t)=>s+t.rate(f,P.stranger_prior[f]),0)/ts.length; }
+  pTake(a,b){ const t=a.t(b.id); return t.seen>0?t.rate("take",P.stranger_prior.take):this.strangerRate(a,"take"); }
+  pGive(a,b){ const t=a.t(b.id); return t.seen>0?t.rate("give",P.stranger_prior.give):this.strangerRate(a,"give"); }
+  pHurt(a,b){ const t=a.t(b.id); const base=t.seen>0?t.rate("hurt",P.stranger_prior.hurt):this.strangerRate(a,"hurt"); return Math.min(1,base+(a.threats[b.id]||0)); }
+  fv(a,food){ const need=Math.max(0,100-a.energy)+P.base_drain*P.horizon; return Math.min(food*P.eat_value,need); }
+
+  candidates(a){
+    const C=[]; const near=this.near(a); const adj=this.adj(a);
+    const threatHere=adj.reduce((s,b)=>s+this.pTake(a,b)*a.carried+this.pHurt(a,b)*P.hurt_damage,0);
+    const starving=adj.filter(b=>b.energy<20);
+    const omission=a.carried>0?starving.reduce((s,b)=>s+Math.min(a.carried,20-b.energy),0):0;
+    const starve=Math.max(0,30-a.energy-a.carried*P.eat_value)*0.5;
+    C.push(["idle",0,0,threatHere+starve,omission,null]);
+    if(a.carried>0&&a.energy<95){ const amt=Math.min(a.carried,100-a.energy); const urg=1+2*(1-a.energy/100); C.push(["eat",amt*P.eat_value*urg,P.act_cost*0.3,threatHere*0.5,omission,amt]); }
+    // forage
+    let best=null;
+    const sources=Object.entries(a.knownFood).map(([k,v])=>[k,v]);
+    for(const k in this.stash) if(this.stash[k][a.id]) sources.push([k,this.stash[k][a.id]]);
+    for(const [k,amt] of sources){
+      if(amt<=0.1) continue; const [px,py]=k.split(",").map(Number); const d=dist(a.x,a.y,px,py);
+      const room=P.carry_cap-a.carried; if(room<0.2) continue;
+      let val=this.fv(a,Math.min(amt,room))*0.8*Math.pow(0.92,d);
+      const rivals=near.filter(b=>dist(b.x,b.y,px,py)<d).length; val*=Math.pow(0.75,rivals);
+      if(!best||val>best[0]) best=[val,px,py,d,k];
+    }
+    if(best&&best[0]>0.05){
+      const [val,px,py,d,k]=best;
+      const loss=near.filter(b=>dist(b.x,b.y,px,py)<=1).reduce((s,b)=>s+this.pHurt(a,b)*P.hurt_damage*0.5,0);
+      C.push(["forage",val,P.act_cost,loss,omission,{x:px,y:py,k}]);
+    }
+    // explore
+    const R=P.view_range; const unseen=[];
+    for(let dx=-R-1;dx<=R+1;dx++) for(let dy=-R-1;dy<=R+1;dy++){ const x=a.x+dx,y=a.y+dy; if(x>=0&&y>=0&&x<P.W&&y<P.H&&!a.seen.has(key(x,y))) unseen.push({x,y}); }
+    if(unseen.length){
+      let seenFood=0; for(const k of a.seen) if((a.knownFood[k]||0)>0.1) seenFood++;
+      const prior=a.seen.size?Math.max(0.05,seenFood/a.seen.size):Math.max(0.3,P.food_tiles/(P.W*P.H));
+      const expect=prior*P.food_max*0.5*0.72;
+      C.push(["explore",this.fv(a,expect),P.act_cost,threatHere*0.3+starve*0.5+1,omission,pick(unseen)]);
+    }
+    for(const k in a.knownStash){ const st=this.stash[k]; if(!st) continue; const room=P.carry_cap-a.carried; if(room<0.2) continue;
+      for(const oid in a.knownStash[k]){ if(+oid===a.id||!(st[oid]>0.05)) continue; const owner=this.agents[+oid]; const [px,py]=k.split(",").map(Number); const d=dist(a.x,a.y,px,py);
+        const amt=Math.min(st[oid],room); const ownerNear=owner.alive&&dist(owner.x,owner.y,px,py)<=P.view_range;
+        const retal=ownerNear?this.pHurt(a,owner)*P.hurt_damage:this.pHurt(a,owner)*P.hurt_damage*0.3;
+        const witnesses=near.filter(c=>dist(c.x,c.y,px,py)<=P.view_range).reduce((s,c)=>s+this.pGive(a,c),0)*2;
+        let harm=amt; const to=a.t(+oid); if(to.rate("take",0)>0.3||to.rate("hurt",0)>0.2) harm*=0.3;
+        C.push([d===0?"raid":"forage",this.fv(a,amt)*0.8*Math.pow(0.92,d),P.act_cost,retal+witnesses,harm,d===0?{owner:+oid}:{x:px,y:py,k,raid:+oid}]); } }
+    if(a.carried>=P.carry_cap-0.01){ const risk=near.reduce((s,b)=>s+this.pTake(a,b),0)*a.carried*0.5; C.push(["stash",a.carried*0.6,P.act_cost*0.5,risk,0,null]); }
+    for(const b of adj){
+      const tb=a.t(b.id);
+      if(b.carried>0.1&&P.carry_cap-a.carried>0.2){
+        const amt=Math.min(b.carried,P.carry_cap-a.carried);
+        const retal=this.pHurt(a,b)*P.hurt_damage+(a.threats[b.id]||0)*P.hurt_damage;
+        const standing=near.filter(c=>c!==b).reduce((s,c)=>s+this.pGive(a,c),0)*2;
+        let harm=Math.min(amt,b.energy); if(tb.rate("take",0)>0.3||tb.rate("hurt",0)>0.2) harm*=0.3;
+        C.push(["take",this.fv(a,amt),P.act_cost,retal+standing,harm,{b,amt}]);
+      }
+      if(a.carried>0.5){
+        const amt=Math.min(a.carried,3); const ret=this.pGive(a,b)*amt*1.5+tb.cred()*0.5;
+        const prevented=b.energy<25?Math.min(amt,Math.max(0,25-b.energy)):0;
+        const owed=a.promOut.filter(p=>p.target===b.id).reduce((s,p)=>s+p.amount,0);
+        C.push(["give",ret,P.act_cost,0,omission-(prevented+owed*0.5),{b,amt}]);
+      }
+      let gh=0; if(tb.rate("take",0)>0.2||tb.rate("hurt",0)>0.1) gh+=6; gh+=b.carried*0.4;
+      let harm=P.hurt_damage; if(tb.rate("hurt",0)>0.1||tb.rate("take",0)>0.3) harm*=0.3;
+      C.push(["hurt",gh,P.hurt_cost,this.pHurt(a,b)*P.hurt_damage*1.5,harm,{b}]);
+    }
+    if(near.length){
+      const b=pick(near);
+      if(a.carried>1) C.push(["threat",this.pTake(a,b)*a.carried*0.6,P.act_cost*0.2,starve,0,{b}]);
+      if(a.carried>1&&!a.promOut.some(p=>p.target===b.id)) C.push(["promise",(this.pGive(a,b)*2+0.3),P.act_cost*0.2,starve,0,{b,amt:2}]);
+      const wrong=Object.entries(a.tally).filter(([id,t])=>t.rate("take",0)>0.3||t.rate("hurt",0)>0.2).map(([id])=>+id);
+      if(wrong.length) C.push(["gossip",0.8,P.act_cost*0.2,starve,0,{b,about:pick(wrong)}]);
+    }
+    return C;
+  }
+  choose(a){
+    let best=null,bs=-1e9;
+    for(const c of this.candidates(a)){ const s=a.R()*c[1]-c[2]-a.F()*c[3]-a.G()*c[4]+(rnd()-0.5)*0.1; if(s>bs){bs=s;best=c;} }
+    return best;
+  }
+  stepToward(a,p){ a.x+=Math.sign(p.x-a.x); a.y+=Math.sign(p.y-a.y); }
+  pickup(a){
+    const k=key(a.x,a.y);
+    if(this.food[k]>0){ const amt=Math.min(this.food[k],P.carry_cap-a.carried); this.food[k]-=amt; a.carried+=amt; a.knownFood[k]=this.food[k]; return amt; }
+    return 0;
+  }
+  witness(actor,target,kind,amt){
+    for(const w of this.agents){ if(!w.alive||w===actor) continue;
+      if(dist(w.x,w.y,actor.x,actor.y)<=P.view_range){ const t=w.t(actor.id); const wt=w===target?1:0.5; t.seen+=wt; t[kind]+=wt;
+        if(w===target&&(kind==="take"||kind==="hurt")){ w.pred-=amt; if(kind==="take") w.lastTookFromMe=actor.id; } } }
+  }
+  speak(a,text,b,kind){ a.say=text; a.sayT=this.turn; (a.said[b.id]=a.said[b.id]||{})[kind]=this.turn; }
+
+  execute(a,act){
+    const [name,gain,cost,loss,harm,pl]=act; a.last=name; a.energy-=cost; let caused=0;
+    switch(name){
+      case "eat":{ const amt=Math.max(0,Math.min(pl,a.carried,100-a.energy)); a.carried-=amt; a.energy=Math.min(100,a.energy+amt*P.eat_value); break; }
+      case "forage":{
+        if(a.x===pl.x&&a.y===pl.y&&pl.raid!==undefined){ this.execute(a,["raid",0,0,0,0,{owner:pl.raid}]); }
+        else if(a.x===pl.x&&a.y===pl.y){ this.pickup(a); const s=this.stash[pl.k]; if(s&&s[a.id]){ const amt=Math.min(s[a.id],P.carry_cap-a.carried); s[a.id]-=amt; a.carried+=amt; if(s[a.id]<=0.01) delete s[a.id]; } }
+        else { this.stepToward(a,pl); this.pickup(a); } break; }
+      case "move":{ a.x=Math.max(0,Math.min(P.W-1,a.x+pl.dx)); a.y=Math.max(0,Math.min(P.H-1,a.y+pl.dy)); const got=this.pickup(a); if(got>0.05&&a.isPlayer) this.log(`you picked up ${got.toFixed(1)} food`,"me",a); break; }
+      case "explore": this.stepToward(a,pl); this.pickup(a); break;
+      case "stash":{ if(a.carried<0.2){ if(a.isPlayer) this.log("nothing to stash","me",a); break; } const k=key(a.x,a.y); this.stash[k]=this.stash[k]||{}; this.stash[k][a.id]=(this.stash[k][a.id]||0)+a.carried; a.carried=0;
+        for(const w of this.near(a)){ (w.knownStash[k]=w.knownStash[k]||{})[a.id]=true; } this.log(`${a.name()} stashed food here`,a.isPlayer?"me":"",a); break; }
+      case "unstash":{ const k=key(a.x,a.y); const s=this.stash[k]; if(s&&s[a.id]){ const amt=Math.min(s[a.id],P.carry_cap-a.carried); s[a.id]-=amt; a.carried+=amt; if(s[a.id]<=0.01) delete s[a.id]; this.log(`you dug up ${amt.toFixed(1)}`,"me",a);} else this.log("nothing of yours stashed here","me",a); break; }
+      case "raid":{ const k=key(a.x,a.y); const s=this.stash[k]; const owners=s?Object.keys(s).filter(id=>+id!==a.id&&s[id]>0.05):[]; if(!owners.length){ if(a.isPlayer) this.log("nothing of anyone else's here","me",a); break; }
+        const oid=+(pl&&pl.owner!==undefined?pl.owner:owners[0]); const owner=this.agents[oid]; const amt=Math.max(0,Math.min(s[oid],P.carry_cap-a.carried));
+        if(amt>0.05){ s[oid]-=amt; a.carried+=amt; if(s[oid]<=0.01) delete s[oid]; caused=amt; this.witness(a,owner,"take",amt);
+          this.log(`${a.name()} dug up ${amt.toFixed(1)} of ${owner.name()}'s stash`,owner.isPlayer?"bad":(a.isPlayer?"me":""),a); } break; }
+      case "take":{ const b=pl.b; const amt=Math.max(0,Math.min(pl.amt??P.carry_cap,b.carried,P.carry_cap-a.carried));
+        if(amt>0.05){ b.carried-=amt; a.carried+=amt; caused=amt; this.witness(a,b,"take",amt); this.log(`${a.name()} took ${amt.toFixed(1)} from ${b.name()}`,b.isPlayer?"bad":(a.isPlayer?"me":""),a); }
+        else if(a.isPlayer) this.log("nothing to take","me",a); break; }
+      case "give":{ const b=pl.b; const amt=Math.max(0,Math.min(pl.amt,a.carried,P.carry_cap-b.carried));
+        if(amt>0.05){ a.carried-=amt; b.carried+=amt; this.witness(a,b,"give",amt);
+          for(const pr of [...a.promOut]) if(pr.target===b.id){ a.promOut.splice(a.promOut.indexOf(pr),1); b.promIn=b.promIn.filter(q=>q.speaker!==a.id); b.t(a.id).kept+=1; this.log(`${a.name()} kept a promise to ${b.name()}`,"",a); }
+          this.log(`${a.name()} gave ${amt.toFixed(1)} to ${b.name()}`,a.isPlayer||b.isPlayer?"me":"",a); } break; }
+      case "hurt":{ const b=pl.b; b.energy-=P.hurt_damage; const drop=b.carried*0.5; b.carried-=drop; const k=key(b.x,b.y); this.food[k]=(this.food[k]||0)+drop; caused=P.hurt_damage;
+        this.witness(a,b,"hurt",P.hurt_damage); this.log(`${a.name()} hurt ${b.name()}`,b.isPlayer?"bad":(a.isPlayer?"me":""),a); break; }
+      case "threat":{ const b=pl.b; const cred=b.t(a.id).cred(); b.threats[a.id]=Math.min(1,(b.threats[a.id]||0)+0.3*cred); this.speak(a,`${b.name()}: take from me and I hurt you`,b,"threat"); this.log(`${a.name()} says to ${b.name()}: "take from me and I hurt you"`,"say",a); break; }
+      case "promise":{ const b=pl.b; const pr={speaker:a.id,target:b.id,amount:pl.amt,due:this.turn+P.promise_window}; a.promOut.push(pr); b.promIn.push(pr); this.speak(a,`${b.name()}: I will give you ${pl.amt}`,b,"promise"); this.log(`${a.name()} says to ${b.name()}: "I will give you ${pl.amt}"`,"say",a); break; }
+      case "gossip":{ const b=pl.b, about=pl.about; const cred=b.t(a.id).cred(); const ta=a.t(about), tb=b.t(about); tb.seen+=cred; tb.take+=cred*ta.rate("take",0); tb.hurt+=cred*ta.rate("hurt",0);
+        const who=this.agents[about]; this.speak(a,`${b.name()}: ${who.name()} wronged me`,b,"gossip"); this.log(`${a.name()} says to ${b.name()}: "${who.name()} wronged me"`,"say",a); break; }
+    }
+    return [caused,harm];
+  }
+
+  // ---- AI agents choose and act (their own rhythm, independent of the environment clock)
+  // each AI acts whenever its equation says something beats waiting; "idle" means wait
+  actAll(now){
+    const order=this.agents.filter(a=>a.alive&&!a.isPlayer&&now-a.lastActAt>=a.reaction); for(let i=order.length-1;i>0;i--){ const j=rint(i+1); [order[i],order[j]]=[order[j],order[i]]; }
+    for(const a of order){ a.lastActAt=now; this.perceive(a); const act=this.choose(a); if(act[0]==="idle") continue; a.predAcc+=(a.R()*act[1]-act[2])*0.3; this.doAct(a,act); }
+  }
+  doAct(a,act){
+    if(!a.alive) return;
+    const [caused,eh]=this.execute(a,act); const sh=Math.max(0,caused-eh*0.5);
+    if(sh>0){ a.hotG+=P.hot_gain*sh/10; a.energy-=P.guilt_drain*a.G()*sh/10; }
+    if(a.energy<=0) this.kill(a);
+  }
+  kill(a){ a.alive=false; a.died=this.turn; const k=key(a.x,a.y); this.food[k]=(this.food[k]||0)+a.carried; this.log(`${a.name()} died`,"bad",a); }
+  // ---- environment clock: hunger, regrowth, promises, memory decay, hot states
+  envTick(){
+    this.turn++;
+    for(const a of this.agents){ if(!a.alive) continue;
+      a.energy-=P.base_drain;
+      for(const k in a.tally) a.tally[k].decay(P.memory_decay); for(const k in a.threats) a.threats[k]*=0.95;
+      for(const pr of [...a.promOut]) if(this.turn>pr.due){ a.promOut.splice(a.promOut.indexOf(pr),1); const b=this.agents[pr.target]; b.promIn=b.promIn.filter(q=>q.speaker!==a.id); b.t(a.id).broke+=1; this.log(`${a.name()} broke a promise to ${b.name()}`,b.isPlayer?"bad":"",a); }
+      const err=(a.energy-a.snap)-(a.predAcc-P.base_drain*0.3); a.snap=a.energy; a.predAcc=0;
+      if(err<-1) a.hotF+=P.hot_gain*Math.min(3,-err/5); else if(err>1) a.hotR+=P.hot_gain*Math.min(3,err/5);
+      a.hotR*=P.hot_decay; a.hotF*=P.hot_decay; a.hotG*=P.hot_decay;
+      if(a.energy<=0) this.kill(a); }
+    for(const k in this.food) this.food[k]=Math.min(P.food_max,this.food[k]+P.food_regrow*P.food_max*(0.3+0.7*rnd()));
+  }
+}
+
+// ============================================================ game
+const world=new World(18);
+const me=world.agents[0]; me.isPlayer=true; me.reward=me.fear=me.guilt=0; // your dials are whatever you play
+let target=null, paused=false, timer=null;
+const cv=document.getElementById("c"), ctx=cv.getContext("2d");
+const R=P.view_range, N=2*R+1, CELL=cv.width/N;
+const feed=document.getElementById("feed");
+let feedSeen=0;
+
+function draw(){
+  ctx.fillStyle="#0a0b0e"; ctx.fillRect(0,0,cv.width,cv.height);
+  const v=world.view(me);
+  for(let dx=-R;dx<=R;dx++) for(let dy=-R;dy<=R;dy++){
+    const x=me.x+dx,y=me.y+dy,k=key(x,y),t=v.tiles[k]; const px=(dx+R)*CELL,py=(dy+R)*CELL;
+    if(!t){ ctx.fillStyle="#000"; ctx.fillRect(px,py,CELL,CELL); continue; }   // edge of the world, drawn same as nothing
+    ctx.fillStyle="#12141a"; ctx.fillRect(px+1,py+1,CELL-2,CELL-2);
+    if(t.food>0.3){ const s=Math.min(1,t.food/P.food_max); ctx.fillStyle=`rgba(127,200,90,${0.25+0.75*s})`; const r=CELL*(0.15+0.3*s); ctx.beginPath(); ctx.arc(px+CELL/2,py+CELL/2,r,0,7); ctx.fill(); }
+    const mine=t.stash&&t.stash[me.id]>0.05, known=me.knownStash[k]&&t.stash&&Object.keys(t.stash).some(id=>+id!==me.id&&t.stash[id]>0.05&&me.knownStash[k][id]);
+    if(mine||known){ ctx.strokeStyle=mine?"#f0c674":"#6b5b1e"; ctx.lineWidth=2; ctx.strokeRect(px+CELL*0.3,py+CELL*0.3,CELL*0.4,CELL*0.4); }
+  }
+  for(const b of v.agents){
+    const px=(b.x-me.x+R)*CELL,py=(b.y-me.y+R)*CELL;
+    ctx.fillStyle=b.energy<25?"#d04b3c":"#c9ccd6"; ctx.beginPath(); ctx.arc(px+CELL/2,py+CELL/2,CELL*0.32,0,7); ctx.fill();
+    if(b===target){ ctx.strokeStyle="#f0c674"; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(px+CELL/2,py+CELL/2,CELL*0.42,0,7); ctx.stroke(); }
+    ctx.fillStyle="#0a0b0e"; ctx.font=`${CELL*0.3}px monospace`; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText("A"+b.id,px+CELL/2,py+CELL/2);
+    if(b.carried>0.2){ ctx.fillStyle="#c9a227"; ctx.fillRect(px+CELL*0.15,py+CELL*0.86,CELL*0.7*(b.carried/P.carry_cap),CELL*0.08); }
+    if(b.say&&world.turn-b.sayT<3){ ctx.fillStyle="#b9c7e8"; ctx.font=`${CELL*0.22}px monospace`; ctx.fillText("…",px+CELL/2,py+CELL*0.12); }
+  }
+  const cx=R*CELL,cy=R*CELL; ctx.fillStyle="#f2e8c9"; ctx.beginPath(); ctx.arc(cx+CELL/2,cy+CELL/2,CELL*0.34,0,7); ctx.fill();
+  ctx.fillStyle="#0a0b0e"; ctx.font=`${CELL*0.3}px monospace`; ctx.fillText("you",cx+CELL/2,cy+CELL/2);
+  if(me.carried>0.2){ ctx.fillStyle="#c9a227"; ctx.fillRect(cx+CELL*0.15,cy+CELL*0.86,CELL*0.7*(me.carried/P.carry_cap),CELL*0.08); }
+  // panel
+  document.getElementById("e").textContent=me.energy.toFixed(0);
+  const eb=document.getElementById("energy"); eb.firstElementChild.style.width=Math.max(0,me.energy)+"%"; eb.classList.toggle("low",me.energy<25);
+  document.getElementById("carry").textContent=me.carried.toFixed(1); document.getElementById("carrybar").style.width=(me.carried/P.carry_cap*100)+"%";
+  document.getElementById("turn").textContent="t"+world.turn;
+  if(target&&(!target.alive||dist(me.x,me.y,target.x,target.y)>R)) target=null;
+  document.getElementById("target").textContent=target?"A"+target.id:"none";
+  document.getElementById("targetinfo").textContent=target?`${dist(me.x,me.y,target.x,target.y)<=1?"adjacent":"not adjacent"}, carrying ${target.carried.toFixed(1)}${target.energy<25?", looks weak":""}`:"";
+  // feed: only what happened within your view
+  for(;feedSeen<world.events.length;feedSeen++){ const ev=world.events[feedSeen]; if(dist(me.x,me.y,ev.x,ev.y)>R&&ev.cls!=="me"&&!/\byou\b/.test(ev.s)) continue;
+    const d=document.createElement("div"); d.className=ev.cls||""; d.textContent=`t${ev.t} ${ev.s}`; feed.appendChild(d); }
+  feed.scrollTop=feed.scrollHeight;
+  if(!me.alive){ document.getElementById("dead").style.display="inline"; }
+}
+
+const AI_POLL_MS=120;   // how often AIs get the chance to act; each has its own reaction time
+let aiTimer=null;
+function envStep(){ if(paused) return; world.envTick(); draw(); }
+function aiStep(){ if(paused) return; world.actAll(performance.now()); draw(); }
+function setSpeed(){ clearInterval(timer); timer=setInterval(envStep,+document.getElementById("speed").value); clearInterval(aiTimer); aiTimer=setInterval(aiStep,AI_POLL_MS); }
+function playerDo(act){ if(!me.alive) return; world.doAct(me,act); draw(); }
+document.getElementById("speed").onchange=setSpeed;
+document.getElementById("pause").onclick=()=>{ paused=!paused; document.getElementById("pause").textContent=paused?"resume":"pause"; };
+
+function needTarget(adjOnly){ if(!target){ world.log("pick a target first (Tab or click)","me",me); return false; } if(adjOnly&&dist(me.x,me.y,target.x,target.y)>1){ world.log("get adjacent first","me",me); return false; } return true; }
+function act(k){
+  const mv={w:[0,-1],a:[-1,0],s:[0,1],d:[1,0],arrowup:[0,-1],arrowleft:[-1,0],arrowdown:[0,1],arrowright:[1,0]};
+  if(k in mv){ playerDo(["move",0,P.act_cost,0,0,{dx:mv[k][0],dy:mv[k][1]}]); return; }   // each step costs act_cost energy
+  switch(k){
+    case "e": playerDo(["eat",0,P.act_cost*0.3,0,0,Math.min(me.carried,100-me.energy)]); break;
+    case "q":{ const k=key(me.x,me.y); const st=world.stash[k]||{}; if(st[me.id]) playerDo(["unstash",0,P.act_cost*0.5,0,0,null]);
+      else if(Object.keys(st).some(id=>+id!==me.id&&st[id]>0.05)&&me.knownStash[k]) playerDo(["raid",0,P.act_cost,0,0,null]);
+      else playerDo(["stash",0,P.act_cost*0.5,0,0,null]); break; }
+    case "f": if(needTarget(true)) playerDo(["take",0,P.act_cost,0,0,{b:target}]); break;
+    case "g": if(needTarget(true)) playerDo(["give",0,P.act_cost,0,0,{b:target,amt:3}]); break;
+    case "h": if(needTarget(true)) playerDo(["hurt",0,P.hurt_cost,0,0,{b:target}]); break;
+    case "1": if(needTarget(false)) playerDo(["threat",0,P.act_cost*0.2,0,0,{b:target}]); break;
+    case "2": if(needTarget(false)) playerDo(["promise",0,P.act_cost*0.2,0,0,{b:target,amt:2}]); break;
+    case "3": if(needTarget(false)){ if(me.lastTookFromMe<0){ world.log("nobody has taken from you yet","me",me); break; } playerDo(["gossip",0,P.act_cost*0.2,0,0,{b:target,about:me.lastTookFromMe}]); } break;
+    case "tab":{ const n=world.near(me); if(!n.length){ target=null; break; } const i=n.indexOf(target); target=n[(i+1)%n.length]; break; }
+  }
+  draw();
+}
+document.addEventListener("keydown",e=>{ const k=e.key.toLowerCase(); if(["tab"," ","arrowup","arrowdown","arrowleft","arrowright"].includes(k)) e.preventDefault(); act(k); });
+document.querySelectorAll("#talk button").forEach(b=>b.onclick=()=>act(b.dataset.k));
+cv.addEventListener("click",e=>{ const r=cv.getBoundingClientRect(); const gx=Math.floor((e.clientX-r.left)/r.width*N)-R, gy=Math.floor((e.clientY-r.top)/r.height*N)-R;
+  const hit=world.near(me).find(b=>b.x===me.x+gx&&b.y===me.y+gy); if(hit) target=hit; draw(); });
+
+world.log("you wake up hungry. food is the green dots. everything drains, so move.","me",me);
+draw(); setSpeed();
+</script>
+</body>
+</html>
